@@ -3,6 +3,8 @@ use ed25519_dalek::PublicKey;
 use ed25519_dalek::SecretKey;
 use ed25519_dalek::Signature;
 use ed25519_dalek::Keypair;
+use bytes::{BytesMut, BufMut};
+use std::convert::TryInto;
 
 pub struct Options {
     pub server: String,
@@ -18,15 +20,15 @@ pub struct Options {
     pub check_result_max_retry: i32,
 }
 
-pub struct Action<T> {
+pub struct Action {
     contract: String,
     action_name: String,
-    data: T
+    data: String
 }
 
 pub struct AmountLimit {
     token: String,
-    value: f64
+    value: String
 }
 
 pub struct Sig {
@@ -35,17 +37,19 @@ pub struct Sig {
     public_key: String,
 }
 
-pub struct Transaction<T> {
+pub struct Transaction {
     pub time: i64,
     pub expiration: i64,
     pub gas_ratio: f64,
     pub gas_limit: f64,
     pub delay: i64,
     pub chain_id: u32,
-    pub actions: Vec<Action<T>>,
+    pub actions: Vec<Action>,
     pub amount_limit: Vec<AmountLimit>,
     pub publisher: String,
-    pub publisher_sigs: Vec<Sig>
+    pub publisher_sigs: Vec<Sig>,
+    pub signers: Vec<String>,
+    pub signatures: Vec<String>,
 }
 
 pub type PledgeAction = (u32, String, String);
@@ -55,7 +59,7 @@ pub struct IOST {
 	pub use_longest_chain: bool,
 	pub verbose: bool,
 	pub chain_id:  u32,
-	pub rpc_connection:  String, //TODO
+    pub rpc_connection:  String, //TODO
 }
 
 impl IOST {
@@ -125,7 +129,7 @@ impl IOST {
     }
 
 
-    pub fn create_tx_byte(){
+    pub fn create_tx_byte(self){
         let s = bs58::decode("2yquS3ySrGWPEKywCPzX4RTJugqRh7kJSo5aehsLYPEWkUxBWA39oMrZ7ZxuM4fgyXYs2cPwh5n8aNNpH5x2VyK1").into_vec().unwrap();
 
         let seckey: SecretKey =  SecretKey::from_bytes(&s).unwrap();
@@ -138,11 +142,11 @@ impl IOST {
         let actions = vec!( Action {
                 contract: String::from("gas.iost"),
                 action_name: String::from("pledge"),
-                data: (100, String::from("admin"), String::from("admin"))
+                data: String::from("[100, 'admin', 'admin']")
             });
         let amount_limit = vec!( AmountLimit {
             token: String::from("iost"),
-            value: 100.0
+            value: String::from("100")
         });
 
         let sig = vec!( Sig{
@@ -161,13 +165,51 @@ impl IOST {
             actions,
             amount_limit,
             publisher: String::from("admin"),
-            publisher_sigs: sig
+            publisher_sigs: sig,
+            signers: [].to_vec(),
+            signatures: [].to_vec()
         };
+
+        let tx_bytes = self::IOST::_bytes(tx);
+        // TODO sign the transaction bytes with sha3
     }
 
-    fn _bytes(&tx: Transaction<T>) -> Vec<u8>{
+    fn _bytes(tx: Transaction) -> Vec<u8>{
+        let mut b = BytesMut::new();
+        let gas_ratio: i64 = tx.gas_ratio.round() as i64;
+        let gas_limit: i64 = tx.gas_ratio.round() as i64;
+        b.put_i64_be(tx.time);
+        b.put_i64_be(tx.expiration);
+        b.put_i64_be( gas_ratio * 100);
+        b.put_i64_be( gas_limit * 100);
+        b.put_i64_be(tx.delay);
+        b.put_u32_be(tx.chain_id);
+        b.put_i32_be(0);
 
-    };
+        let signers_len = tx.signers.len().try_into().unwrap();
+
+        b.put_i32_be(signers_len);
+        for i in 0 .. tx.signers.len() {
+            b.put(tx.signers[i].as_bytes());
+        };
+
+        let actions_len = tx.actions.len().try_into().unwrap();
+        b.put_i32_be(actions_len);
+        for i in 0 .. tx.actions.len(){
+            b.put(tx.actions[i].contract.as_bytes());
+            b.put(tx.actions[i].action_name.as_bytes());
+            b.put(tx.actions[i].data.as_bytes());
+        };
+
+        let amount_len = tx.amount_limit.len().try_into().unwrap();
+        b.put_i32_be(amount_len);
+        for i in 0 .. tx.amount_limit.len(){
+            b.put(tx.amount_limit[i].token.as_bytes());
+            b.put(tx.amount_limit[i].value.as_bytes());
+        };
+
+        b.to_vec()
+    }
 }
 
 
