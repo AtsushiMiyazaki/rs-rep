@@ -1,10 +1,18 @@
 use bs58;
 use ed25519_dalek::PublicKey;
 use ed25519_dalek::SecretKey;
+use ed25519_dalek::ExpandedSecretKey;
 use ed25519_dalek::Signature;
 use ed25519_dalek::Keypair;
 use bytes::{BytesMut, BufMut};
 use std::convert::TryInto;
+use sha3::{Digest, Sha3_256};
+use grpcio::{ChannelBuilder, EnvBuilder, Environment};
+use log::*;
+use std::sync::Arc;
+use env_logger::*;
+use protobuf::Message as Message_imported_for_functions;
+use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
 pub struct Options {
     pub server: String,
@@ -20,30 +28,74 @@ pub struct Options {
     pub check_result_max_retry: i32,
 }
 
+#[derive(Clone)]
 pub struct Action {
     contract: String,
     action_name: String,
     data: String
 }
 
+#[derive(Clone)]
 pub struct AmountLimit {
     token: String,
     value: String
 }
 
+#[derive(Clone)]
 pub struct Sig {
     algorithm: String,
-    signature: String,
-    public_key: String,
+    public_key: PublicKey,
+    signature: Signature,
+}
+
+pub struct RpcClient {
+    client: grpcio::Client
 }
 
 pub struct Transaction {
     pub time: i64,
     pub expiration: i64,
-    pub gas_ratio: f64,
-    pub gas_limit: f64,
+    pub gas_ratio: i64,
+    pub gas_limit: i64,
     pub delay: i64,
-    pub chain_id: u32,
+    pub chain_id: i32,
+    pub actions: Vec<Action>,
+    pub amount_limit: Vec<AmountLimit>,
+    // pub publisher: String,
+    // pub publisher_sigs: Vec<Sig>,
+    pub signers: Vec<String>,
+    pub signatures: Vec<String>,
+}
+
+pub struct Res {
+    message: String
+}
+
+#[derive(Clone,Default)]
+pub struct Request {
+    // message fields
+    pub tx: Tx,
+    // special fields
+    pub unknown_fields: protobuf::UnknownFields,
+    pub cached_size: protobuf::CachedSize,
+}
+
+impl Request {
+    pub fn set_tx(&mut self, tx: Tx) -> &self {
+        self.tx = tx;
+        self
+    }
+}
+
+
+#[derive(Clone,Default)]
+pub struct Tx {
+    pub time: i64,
+    pub expiration: i64,
+    pub gas_ratio: i64,
+    pub gas_limit: i64,
+    pub delay: i64,
+    pub chain_id: i32,
     pub actions: Vec<Action>,
     pub amount_limit: Vec<AmountLimit>,
     pub publisher: String,
@@ -60,6 +112,23 @@ pub struct IOST {
 	pub verbose: bool,
 	pub chain_id:  u32,
     pub rpc_connection:  String, //TODO
+}
+
+const METHOD_HELLOWORLD_CALL: grpcio::Method<Request, Res> = grpcio::Method {
+    ty: grpcio::MethodType::Unary,
+    name: "/sendTx",
+    req_mar: grpcio::Marshaller { ser: grpcio::pb_ser, de: grpcio::pb_de },
+    resp_mar: grpcio::Marshaller { ser: grpcio::pb_ser, de: grpcio::pb_de },
+};
+
+impl RpcClient {
+    pub fn call(&self, req: &Request) -> grpcio::Result<Res> {
+        self.call_opt(req, grpcio::CallOption::default())
+    }
+
+    pub fn call_opt(&self, req: &Request, opt: grpcio::CallOption) -> grpcio::Result<Res> {
+        self.client.unary_call(&METHOD_HELLOWORLD_CALL, req, opt)
+    }
 }
 
 impl IOST {
@@ -88,6 +157,30 @@ impl IOST {
         };
     
         iost
+    }
+
+    pub fn send(){
+        std::env::set_var("RUST_LOG", "server=info");
+        env_logger::init();
+    
+        let env = Arc::new(Environment::new(1));
+        let ch = ChannelBuilder::new(env).connect("localhost:30001");
+
+        let client = RpcClient{
+            client: grpcio::Client::new(ch)
+        }
+
+        let t = self::IOST::create_tx_byte();
+        let req = create_req(t);
+
+        let reply = client.call(&req).expect("rpc");
+        info!("Helloworld received: {}", reply.get_message());
+    }
+
+    pub fn create_req(tx: Tx) -> Request {
+        let req = Request::default();
+        req.set_tx(tx);
+        req
     }
 
     pub fn set_server(&mut self, server: String) -> &Self{
@@ -128,62 +221,97 @@ impl IOST {
         self
     }
 
-
-    pub fn create_tx_byte(self){
+    pub fn pub_key() -> PublicKey {
         let s = bs58::decode("2yquS3ySrGWPEKywCPzX4RTJugqRh7kJSo5aehsLYPEWkUxBWA39oMrZ7ZxuM4fgyXYs2cPwh5n8aNNpH5x2VyK1").into_vec().unwrap();
 
-        let seckey: SecretKey =  SecretKey::from_bytes(&s).unwrap();
+        let seckey: ExpandedSecretKey =  ExpandedSecretKey::from_bytes(&s).unwrap();
         let pubkey: PublicKey = (&seckey).into();
-        let keypair =  Keypair {
-            secret: seckey,
-            public: pubkey
-        };
+        pubkey
+    }
+
+
+
+
+    pub fn create_tx_byte() -> Tx {
+        let s = bs58::decode("2yquS3ySrGWPEKywCPzX4RTJugqRh7kJSo5aehsLYPEWkUxBWA39oMrZ7ZxuM4fgyXYs2cPwh5n8aNNpH5x2VyK1").into_vec().unwrap();
+
+        let seckey: ExpandedSecretKey =  ExpandedSecretKey::from_bytes(&s).unwrap();
+        let pubkey: PublicKey = (&seckey).into();
 
         let actions = vec!( Action {
-                contract: String::from("gas.iost"),
-                action_name: String::from("pledge"),
-                data: String::from("[100, 'admin', 'admin']")
+                contract: String::from("token.iost"),
+                action_name: String::from("transfer"),
+                data: String::from("[\"iost\", \"testaccount\", \"anothertest\", \"100\", \"this is an example transfer\"]")
             });
         let amount_limit = vec!( AmountLimit {
-            token: String::from("iost"),
-            value: String::from("100")
+            token: String::from("*"),
+            value: String::from("unlimited")
         });
 
-        let sig = vec!( Sig{
-            algorithm: String::from("ED25519"),
-            signature: String::from(""),
-            public_key: String::from("")
-        });
+        // let sig = vec!( Sig{
+        //     algorithm: String::from("ED25519"),
+        //     signature: String::from(""),
+        //     public_key: String::from("")
+        // });
 
         let tx = Transaction {
-            time: 1575804827,
-            expiration: 1585804827,
-            gas_ratio: 1.0,
-            gas_limit: 100000.0,
+            time: 1544709662543340000,
+            expiration: 1544709692318715000,
+            gas_ratio: 1,
+            gas_limit: 500000,
             delay: 0,
-            chain_id: 1020,
+            chain_id: 1024,
+            signers: [].to_vec(),
             actions,
             amount_limit,
-            publisher: String::from("admin"),
-            publisher_sigs: sig,
-            signers: [].to_vec(),
             signatures: [].to_vec()
         };
 
         let tx_bytes = self::IOST::_bytes(tx);
-        // TODO sign the transaction bytes with sha3
+        let hashed_bytes = self::IOST::_hash(tx_bytes);
+
+        let s = seckey.sign(&hashed_bytes, &pubkey);
+        
+        let tx = Tx {
+            time: 1544709662543340000,
+            expiration: 1544709692318715000,
+            gas_ratio: 1,
+            gas_limit: 500000,
+            delay: 0,
+            chain_id: 1024,
+            signers: [].to_vec(),
+            actions,
+            amount_limit,
+            signatures: [].to_vec(),
+            publisher: String::from("admin"),
+            publisher_sigs: vec!(Sig {
+                algorithm: "ED25519".to_string(),
+                public_key: pubkey,
+                signature: s 
+            })
+        };
+        tx
+    }
+
+    fn _hash( b: Vec<u8>) -> Vec<u8> {
+        let mut hasher = Sha3_256::new();
+        
+        hasher.input(b"hello");
+        
+        let result = hasher.result();
+        result.to_vec()
     }
 
     fn _bytes(tx: Transaction) -> Vec<u8>{
-        let mut b = BytesMut::new();
-        let gas_ratio: i64 = tx.gas_ratio.round() as i64;
-        let gas_limit: i64 = tx.gas_ratio.round() as i64;
+        let mut b = BytesMut::with_capacity(1024);
+        // let gas_ratio: i64 = tx.gas_ratio.round() as i64;
+        // let gas_limit: i64 = tx.gas_ratio.round() as i64;
         b.put_i64_be(tx.time);
         b.put_i64_be(tx.expiration);
-        b.put_i64_be( gas_ratio * 100);
-        b.put_i64_be( gas_limit * 100);
+        b.put_i64_be( tx.gas_ratio);
+        b.put_i64_be( tx.gas_limit);
         b.put_i64_be(tx.delay);
-        b.put_u32_be(tx.chain_id);
+        b.put_i32_be(tx.chain_id);
         b.put_i32_be(0);
 
         let signers_len = tx.signers.len().try_into().unwrap();

@@ -1,5 +1,5 @@
 [package]
-name = "iost"
+name = "rpc"
 version = "0.1.0"
 authors = ["AtsushiMiyazaki <miyazaki@eversystem.co.jp>"]
 edition = "2018"

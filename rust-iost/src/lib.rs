@@ -5,12 +5,11 @@ pub mod iost;
 mod tests {
     use super::iost;
     use bs58;
+    use ed25519_dalek::Signature;
+    use std::str;
     #[test]
     fn it_works() {
-        let i = iost::IOST::dec();
-        println!("{:?}", i);
-        let s = bs58::decode("2yquS3ySrGWPEKywCPzX4RTJugqRh7kJSo5aehsLYPEWkUxBWA39oMrZ7ZxuM4fgyXYs2cPwh5n8aNNpH5x2VyK1").into_vec().unwrap();
-        assert_eq!(i, );
+        let k = iost::IOST::send();
     }
     
 }
