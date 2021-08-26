@@ -12,7 +12,7 @@ fn main() {
             .read_line(&mut buf)
             .expect("Failed to read line");
 
-        let guess: u8 = buf.trim().parse().expect("Expected number");
+        let guess: u8 = buf.trim().parse();
         match guess.cmp(&rnum) {
             Ordering::Less => println!("Small"),
             Ordering::Equal => {
